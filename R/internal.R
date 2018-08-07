@@ -96,12 +96,11 @@ reassign_probs <- function(comparemat, zero_one_dframe, probabilities){
 ### mortality ###
 
 
-EM_match_modelsearch <- function(count_dframe,m_1,u_1,m_2,u_2,fixedcol=c(2:9),p_init=0.5,tol=10^-5,maxit=10000,allterms=allterms){
-  N <- sum(count_dframe[ncol(count_dframe)])
+EM_match_modelsearch <- function(count_dframe,m,u,fixedcol=c(2:9),p_init=0.5,tol=10^-5,maxit=10000,allterms=allterms){
+  N <- sum(count_dframe$counts)
   L <- ncol(count_dframe)-1
-  colnames(count_dframe) <- c(paste("var",1:L,sep=""),"counts")
-
-  stuff <- EM_match_independence_v2(count_dframe,m_1,u_1,m_2,u_2,p_init=0.5,tol=10^-5,fixedcol=fixedcol)         ##  get starting values.
+  
+  stuff <- EM_match_independence_v3(count_dframe,m,u,p_init=0.5,tol=10^-5,fixedcol=fixedcol)  ##  get starting values.
   p_new <- stuff$p
   p_old <- p_new
   gamma_current <- stuff$probs
@@ -110,268 +109,269 @@ EM_match_modelsearch <- function(count_dframe,m_1,u_1,m_2,u_2,fixedcol=c(2:9),p_
   probs_match_old <- probs_match_new
   probs_mismatch_new <- count_dframe$counts*(1-gamma_current)/sum(count_dframe$counts*(1-gamma_current))
   probs_mismatch_old <- probs_mismatch_new
-
-  while((counter<=maxit & (max(max(abs(probs_match_new-probs_match_old)),max(abs(probs_mismatch_new-probs_mismatch_old)),abs(p_new-p_old))  > tol))|counter<=2){
-    #if(counter>1) browser()
+  
+  Ecounts_match = count_dframe
+  Ecounts_mismatch = count_dframe
+  
+  while((counter<=maxit & max(abs(c(probs_match_new-probs_match_old, probs_mismatch_new-probs_mismatch_old,p_new-p_old))) > tol) |counter<=2){
+    
     probs_match_old <-  probs_match_new
     probs_mismatch_old <-  probs_mismatch_new
     p_old <- p_new
-
-    for(i in 1:nrow(count_dframe)){
-
-      gamma_current[i] <- p_old*probs_match_old[i]/(p_old*probs_match_old[i]  + (1-p_old)*probs_mismatch_old[i])
-
-
-    }
+    
+    gamma_current <- p_old*probs_match_old/(p_old*probs_match_old  + (1-p_old)*probs_mismatch_old)
     gamma_current[is.na(gamma_current)] <- 0
+    
     p_new <- sum(gamma_current*count_dframe$counts)/sum(count_dframe$counts)
-    Ecounts_match = data.frame(cbind(count_dframe[,1:L],"counts"=count_dframe$counts*gamma_current))
-    Ecounts_mismatch = data.frame(cbind(count_dframe[,1:L],"counts"=count_dframe$counts*(1-gamma_current)))
-    #      Ecounts_mismatch$counts <- round(Ecounts_mismatch$counts,0)
-    #  Ecounts_match$counts <- round(Ecounts_match$counts,0)
-
+    
+    Ecounts_match$counts = count_dframe$counts*gamma_current
+    Ecounts_mismatch$counts = count_dframe$counts*(1-gamma_current)
+    
     ##  only do the following on first iteration:
     if(counter==1){
-      termstoadd_match <- ""
-      newterm=""
+      
+      newterm = 1
       logN <- log(sum(count_dframe$counts))
-      fullterms =  print_simplelmform(L)
-      rm(log_linear_match,pos=1)
-      eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
+      
       termsnotadded = allterms
-      termsadded = c()
-      while(newterm!="<none>"){
-        eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
-        #stuff <- add1(log_linear_match, uppermatch$formula)    #strange behvious
-        BICvec <- numeric(length(termsnotadded)+1)
-        BICvec <- numeric(length(termsnotadded)+1)
-        BICvec[1] <- log_linear_match$deviance
-        for(j in 1:length(termsnotadded)){
-          eval(parse(text=paste("log_linear_match_c <- glm(counts ~ .",termstoadd_match,"+",termsnotadded[j],",poisson , Ecounts_match)",sep="")))
-          BICvec[1+j] <- log_linear_match_c$deviance + logN*(log_linear_match$df.residual - log_linear_match_c$df.residual)
-        }
-        newterm = termsnotadded[which.min(BICvec[2:length(BICvec)])]
-        termstoadd_match <- paste(termstoadd_match,"+",newterm,sep="")
+      form_m = 'counts ~ .'
+      log_linear_match <- glm(form_m,quasipoisson , Ecounts_match)
+      BIC_0 = log_linear_match$deviance
+      minBIC = BIC_0 / 2
+      
+      while(BIC_0 > minBIC){
+        form_m = paste(form_m,newterm,sep='+')
+        
+        log_linear_match <- glm(form_m ,quasipoisson , Ecounts_match)
+        
+        dfres_0 = log_linear_match$df.residual
+        BIC_0 = log_linear_match$deviance
+        
+        llmcs = lapply(termsnotadded,function(t){
+          formc = paste(form_m, t, sep = '+')
+          glm(formc,quasipoisson , Ecounts_match)
+        })
+        
+        ds = sapply(llmcs,deviance)
+        dfrs = sapply(llmcs, df.residual)
+        
+        BICvec <- ds + logN * (dfres_0 - dfrs)
+        
+        newterm = termsnotadded[which.min(BICvec)]
+        
         termsnotadded = setdiff(termsnotadded,newterm)
-        termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,L=ncol(count_dframe)-1))
-        if(BICvec[1] == min(BICvec)) newterm="<none>"
-
+        termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,colnames(count_dframe)[1:L]))
+        
+        minBIC = min(BICvec) 
       }
-       termstoadd_mismatch <- ""
-      newterm=""
-      logN <- log(sum(count_dframe$counts))
-      fullterms =  print_simplelmform(L)
-      rm(log_linear_mismatch,pos=1)
-      eval(parse(text=paste("log_linear_mismatch <- glm(counts ~ .",termstoadd_mismatch,",poisson , Ecounts_mismatch)",sep="")))
+      
+      newterm = 1
+      
       termsnotadded = allterms
-      termsadded = c()
-      while(newterm!="<none>"){
-        eval(parse(text=paste("log_linear_mismatch <- glm(counts ~ .",termstoadd_mismatch,",poisson , Ecounts_mismatch)",sep="")))
-        #stuff <- add1(log_linear_mismatch, uppermismatch$formula)    #strange behvious
-        BICvec <- numeric(length(termsnotadded)+1)
-        BICvec[1] <- log_linear_mismatch$deviance
-        for(j in 1:length(termsnotadded)){
-          eval(parse(text=paste("log_linear_mismatch_c <- glm(counts ~ .",termstoadd_mismatch,"+",termsnotadded[j],",poisson , Ecounts_mismatch)",sep="")))
-          BICvec[1+j] <- log_linear_mismatch_c$deviance + logN*(log_linear_mismatch$df.residual-log_linear_mismatch_c$df.residual)
-        }
-        newterm = termsnotadded[which.min(BICvec[2:length(BICvec)])]
-        termstoadd_mismatch <- paste(termstoadd_mismatch,"+",newterm,sep="")
+      form_u = 'counts ~ .'
+      log_linear_mismatch <- glm(form_u,quasipoisson , Ecounts_mismatch)
+      BIC_0 = log_linear_mismatch$deviance
+      minBIC = BIC_0 / 2
+      
+      while(BIC_0 > minBIC){
+        form_u = paste(form_u,newterm,sep='+')
+        
+        log_linear_mismatch <- glm(form_u ,quasipoisson , Ecounts_mismatch)
+        
+        dfres_0 = log_linear_mismatch$df.residual
+        BIC_0 = log_linear_mismatch$deviance
+        
+        llmcs = lapply(termsnotadded,function(t){
+          formc = paste(form_u, t, sep = '+')
+          glm(formc,quasipoisson , Ecounts_mismatch)
+        })
+        
+        ds = sapply(llmcs,deviance)
+        dfrs = sapply(llmcs, df.residual)
+        
+        BICvec <- ds + logN * (dfres_0 - dfrs)
+        
+        newterm = termsnotadded[which.min(BICvec)]
+        
         termsnotadded = setdiff(termsnotadded,newterm)
-        termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,L=ncol(count_dframe)-1))            ###  add possible 3 way interactions
-        if(BICvec[1] == min(BICvec)) newterm="<none>"
-
+        termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,colnames(count_dframe)[1:L]))
+        
+        minBIC = min(BICvec) 
       }
     }
     if(counter > 1){
-      eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
-      eval(parse(text=paste("log_linear_mismatch <- glm(counts ~ .",termstoadd_mismatch,",poisson , Ecounts_mismatch)",sep="")))
+      log_linear_match <- glm(form_m,quasipoisson , Ecounts_match)
+      log_linear_mismatch <- glm(form_u,quasipoisson , Ecounts_mismatch)
     }
-
-    probs_match_new <- numeric(2^L)
-    probs_mismatch_new <- numeric(2^L)
-    match_probs <-  log_linear_match$fitted/sum(log_linear_match$fitted)
-    probs_match_new[as.numeric(names(match_probs))] <- match_probs
-    mismatch_probs <-  log_linear_mismatch$fitted/sum(log_linear_mismatch$fitted)
-    probs_mismatch_new[as.numeric(names(mismatch_probs))] <- mismatch_probs
-    # probs_match_new[ probs_match_new < 10^-10] <- 10^-10
-    # probs_mismatch_new[probs_mismatch_new < 10^-10] <- 10^-10
+    
+    probs_match_new <- log_linear_match$fitted/sum(log_linear_match$fitted)
+    probs_mismatch_new <-  log_linear_mismatch$fitted/sum(log_linear_mismatch$fitted)
     counter=counter + 1
   }
-  return(list(p=p_new, probs = gamma_current, model_match = log_linear_match, model_mismatch=log_linear_mismatch))
+  errs = c(mean((Ecounts_match$counts - exp(predict(log_linear_match)))^2/exp(predict(log_linear_match))),
+           mean((Ecounts_mismatch$counts - exp(predict(log_linear_mismatch)))^2/exp(predict(log_linear_mismatch))))
+  nhats = c(sum(exp(predict(log_linear_match))), sum(exp(predict(log_linear_mismatch))))
+  npar = c(length(coef(log_linear_match))-1, length(coef(log_linear_match))-1)
+  alphas = c(p_new,1-p_new)
+  
+  MRC = sum(nhats*log(errs)) + sum(nhats*(nhats + npar)/(nhats-npar-2)) - 2*sum(nhats*log(alphas))
+  
+  return(list(p=p_new, probs = gamma_current, model_match = log_linear_match, model_mismatch=log_linear_mismatch,MRC=MRC))
 }
 
 
-EM_match_independence_v2 <- function(count_dframe,m_1,u_1,m_2,u_2,fixedcol=c(2:9),p_init=0.5,tol=10^-5){
-  N <- sum(count_dframe[ncol(count_dframe)])
+EM_match_independence_v3 <- function(count_dframe,m,u,fixedcol=c(2:9),p_init=0.5,tol=10^-5){
+  counts = count_dframe$counts
+  N <- sum(counts)
   L <- ncol(count_dframe)-1
-  colnames(count_dframe) <- c(paste("var",1:L,sep=""),"counts")
-
+  u_col = (1:L)
+  if(length(fixedcol) > 0) u_col = u_col[-fixedcol]
+  
   gamma_current <- numeric(nrow(count_dframe))
   count_pattern_match <- numeric(nrow(count_dframe))
   count_pattern_nomatch <- numeric(nrow(count_dframe))
-
-
+  
+  
   #  start off the algorithm
   p_old <- p_init
-  m1_old <- m_1
-  m2_old <- m_2
-  u1_old <- u_1
-  u2_old <- u_2
-
-  for(i in 1:nrow(count_dframe)){
-
-    cols_missing <- (1:L)[count_dframe[i,1:L]=="2"]
-    n_missing <- length(cols_missing)
-    cols_matching <- (1:L)[count_dframe[i,1:L]=="1"]
-    n_match <- length(cols_matching)
-    cols_notmatching <- (1:L)[count_dframe[i,1:L]=="0"]
-    n_notmatch <- length(cols_notmatching)
-
-    gamma_current[i] <- p_init*prod(m2_old[cols_missing])*prod(m1_old[cols_matching])*prod((1-m1_old-m2_old)[cols_notmatching])/(p_init*prod(m2_old[cols_missing])*prod(m1_old[cols_matching])*prod((1-m1_old-m2_old)[cols_notmatching])+(1-p_init)*prod(u2_old[cols_missing])*prod(u1_old[cols_matching])*prod((1-u1_old-u2_old)[cols_notmatching]))
-
-
-  }
-
-
-  p_new <- sum(gamma_current*count_dframe$counts)/sum(count_dframe$counts)
-
+  m_old <- m
+  u_old <- u
+  
+  gamma_current <- apply(count_dframe[,1:L],1,function(v){
+    p_init * prod(m_old^v) * prod((1-m_old)^(1-v)) / (p_init * prod(m_old^v) * prod((1-m_old)^(1-v)) + (1-p_init) * prod(u_old^v) * prod((1-u_old)^(1-v)))
+  })
+  
+  p_new <- sum(gamma_current*counts)/N
+  
   #create data frames for counts conditionally for both matches and non matches
-  probs_match = pmax(count_dframe$counts*gamma_current,10^-10)/sum(pmax(count_dframe$counts*gamma_current,10^-10))
-  probs_mismatch = pmax(count_dframe$counts*(1-gamma_current),10^-10)/sum(pmax(count_dframe$counts*(1-gamma_current),10^-10))
-
-  #run log linear model
-  m1_new <- numeric(L)
-  u1_new <- u1_old
-  m2_new <- numeric(L)
-  u2_new <- numeric(L)
-  for(j in 1:L){
-    m1_new[j] <- sum(as.numeric(count_dframe[,j]==1)*probs_match)
-    m2_new[j] <- sum(as.numeric(count_dframe[,j]==2)*probs_match)
-    if(!(j %in% fixedcol)) u1_new[j] <- sum(as.numeric(count_dframe[,j]==1)*probs_mismatch)     #####  Update first name probabilities as these consitute the blocks and would be poorly estimated otherwise
-    if(!(j %in% fixedcol)) u2_new[j] <- sum(as.numeric(count_dframe[,j]==2)*probs_mismatch)
-  }
-  while(max(max(abs(u1_new-u1_old)),max(abs(m1_new-m1_old)),abs(p_new-p_old),max(abs(m2_new-m2_old)),max(abs(u2_new-u2_old)))  > tol){
-    m1_old <-  m1_new
-    u1_old <-  u1_new
-    m2_old <-  m2_new
-    u2_old <-  u2_new
+  probs_match = counts*gamma_current/sum(counts*gamma_current)
+  probs_mismatch = counts*(1-gamma_current)/sum(counts*(1-gamma_current))
+  
+  #Maximization
+  m_new = colSums(count_dframe[,1:L] * probs_match)
+  u_new = u 
+  u_new[u_col] = colSums(count_dframe[,u_col] * probs_mismatch)
+  
+  while(max(abs(c(m_new-m_old, u_new-u_old,p_new-p_old))) > tol){
     p_old <- p_new
-
-
-    for(i in 1:nrow(count_dframe)){
-
-      cols_missing <- (1:L)[count_dframe[i,1:L]=="2"]
-      n_missing <- length(cols_missing)
-      cols_matching <- (1:L)[count_dframe[i,1:L]=="1"]
-      n_match <- length(cols_matching)
-      cols_notmatching <- (1:L)[count_dframe[i,1:L]=="0"]
-      n_notmatch <- length(cols_notmatching)
-
-
-      gamma_current[i] <- p_old*prod(m2_old[cols_missing])*prod(m1_old[cols_matching])*prod((1-m1_old-m2_old)[cols_notmatching])/(p_old*prod(m2_old[cols_missing])*prod(m1_old[cols_matching])*prod((1-m1_old-m2_old)[cols_notmatching])+(1-p_old)*prod(u2_old[cols_missing])*prod(u1_old[cols_matching])*prod((1-u1_old-u2_old)[cols_notmatching]))
-
-
-    }
-    p_new <- sum(gamma_current*count_dframe$counts)/sum(count_dframe$counts)
-    for(j in 1:L){
-      m1_new[j] <- sum(as.numeric(count_dframe[,j]==1)*probs_match)
-      m2_new[j] <- sum(as.numeric(count_dframe[,j]==2)*probs_match)
-      if(!(j %in% fixedcol)) u1_new[j] <- sum(as.numeric(count_dframe[,j]==1)*probs_mismatch)     #####  Update first name probabilities as these consitute the blocks and would be poorly estimated otherwise
-      if(!(j %in% fixedcol)) u2_new[j] <- sum(as.numeric(count_dframe[,j]==2)*probs_mismatch)
-    }
-    probs_match = pmax(count_dframe$counts*gamma_current,10^-10)/sum(pmax(count_dframe$counts*gamma_current,10^-10))
-    probs_mismatch = pmax(count_dframe$counts*(1-gamma_current),10^-10)/sum(pmax(count_dframe$counts*(1-gamma_current),10^-10))
-
+    m_old <- m_new 
+    u_old <- u_new
+    
+    gamma_current <- apply(count_dframe[,1:L],1,function(v){
+      p_old * prod(m_old^v) * prod((1-m_old)^(1-v)) / (p_old * prod(m_old^v) * prod((1-m_old)^(1-v)) + (1-p_old) * prod(u_old^v) * prod((1-u_old)^(1-v)))
+    })
+    
+    p_new <- sum(gamma_current*counts)/N
+    
+    #Maximization
+    m_new = colSums(count_dframe[,1:L] * probs_match)
+    u_new = u 
+    u_new[u_col] = colSums(count_dframe[,u_col] * probs_mismatch)
+    
+    probs_match = counts*gamma_current/sum(counts*gamma_current)
+    probs_mismatch = counts*(1-gamma_current)/sum(counts*(1-gamma_current))
   }
-  return(list(p=p_new, probs = gamma_current,m1=m1_new,u1=u1_new))
+  
+  log_linear_match = glm(I(counts * gamma_current) ~ ., count_dframe, family = quasipoisson())
+  log_linear_mismatch = glm(I(counts * (1-gamma_current)) ~ ., count_dframe, family = quasipoisson())
+  
+  errs = c(mean((counts * gamma_current - exp(predict(log_linear_match)))^2/exp(predict(log_linear_match))),
+           mean((counts * (1-gamma_current) - exp(predict(log_linear_mismatch)))^2/exp(predict(log_linear_mismatch))))
+  nhats = c(sum(exp(predict(log_linear_match))), sum(exp(predict(log_linear_mismatch))))
+  npar = c(length(coef(log_linear_match))-1, length(coef(log_linear_match))-1)
+  alphas = c(p_new,1-p_new)
+  
+  MRC = sum(nhats*log(errs)) + sum(nhats*(nhats + npar)/(nhats-npar-2)) - 2*sum(nhats*log(alphas))
+  
+  return(list(p=p_new, probs = gamma_current, model_match = log_linear_match, model_mismatch=log_linear_mismatch,MRC=MRC))
 }
 
 
-EM_match_modelsearch_iu <- function(count_dframe,m_1,u_1,m_2,u_2,fixedcol=c(2:9),p_init=0.5,tol=10^-5,maxit=10000,allterms=allterms){
-    N <- sum(count_dframe[ncol(count_dframe)])
-    L <- ncol(count_dframe)-1
-    colnames(count_dframe) <- c(paste("var",1:L,sep=""),"counts")
-
-     stuff <- EM_match_independence_v2(count_dframe,m_1,u_1,m_2,u_2,p_init=0.5,tol=10^-5,fixedcol=fixedcol)         ##  get starting values.
-     p_new <- stuff$p
-     p_old <- p_new
-     gamma_current <- stuff$probs
-     counter=1
-     probs_match_new <- count_dframe$counts*gamma_current/sum(count_dframe$counts*gamma_current)
-     probs_match_old <- probs_match_new
-      probs_mismatch_new <- count_dframe$counts*(1-gamma_current)/sum(count_dframe$counts*(1-gamma_current))
-     probs_mismatch_old <- probs_mismatch_new
-
-        while((counter<=maxit & (max(max(abs(probs_match_new-probs_match_old)),max(abs(probs_mismatch_new-probs_mismatch_old)),abs(p_new-p_old))  > tol))|counter<=2){
-             flush.console()
-                       #if(counter>1) browser()
-                probs_match_old <-  probs_match_new
-               probs_mismatch_old <-  probs_mismatch_new
-              p_old <- p_new
-
-              for(i in 1:nrow(count_dframe)){
-
-              gamma_current[i] <- p_old*probs_match_old[i]/(p_old*probs_match_old[i]  + (1-p_old)*probs_mismatch_old[i])
-
-
-          }
-          gamma_current[is.na(gamma_current)] <- 0
-        p_new <- sum(gamma_current*count_dframe$counts)/sum(count_dframe$counts)
-           Ecounts_match = data.frame(cbind(count_dframe[,1:L],"counts"=count_dframe$counts*gamma_current))
-            Ecounts_mismatch = data.frame(cbind(count_dframe[,1:L],"counts"=count_dframe$counts*(1-gamma_current)))
-           #      Ecounts_mismatch$counts <- round(Ecounts_mismatch$counts,0)
-          #  Ecounts_match$counts <- round(Ecounts_match$counts,0)
-
-          ##  only do the following on first iteration:
-       if(counter==1){
-           termstoadd_match <- ""
-            newterm=""
-            logN <- log(sum(count_dframe$counts))
-            fullterms =  print_simplelmform(L)
-             rm(log_linear_match,pos=1)
-            eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
-          termsnotadded = allterms
-            termsadded = c()
-            while(newterm!="<none>"){
-                         eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
-                     #stuff <- add1(log_linear_match, uppermatch$formula)    #strange behvious
-              BICvec <- numeric(length(termsnotadded)+1)
-                BICvec <- numeric(length(termsnotadded)+1)
-                   BICvec[1] <- log_linear_match$deviance
-              for(j in 1:length(termsnotadded)){
-                     eval(parse(text=paste("log_linear_match_c <- glm(counts ~ .",termstoadd_match,"+",termsnotadded[j],",poisson , Ecounts_match)",sep="")))
-                     BICvec[1+j] <- log_linear_match_c$deviance + logN*(log_linear_match$df.residual - log_linear_match_c$df.residual)
-              }
-              newterm = termsnotadded[which.min(BICvec[2:length(BICvec)])]
-                termstoadd_match <- paste(termstoadd_match,"+",newterm,sep="")
-                termsnotadded = setdiff(termsnotadded,newterm)
-                 termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,L=ncol(count_dframe)-1))
-               if(BICvec[1] == min(BICvec)) newterm="<none>"
-                      flush.console()
-                 }
-             termstoadd_mismatch <- ""
-            eval(parse(text=paste("log_linear_mismatch <- glm(counts ~ .",termstoadd_mismatch,",poisson , Ecounts_mismatch)",sep="")))
-            termstoadd_mismatch <- "var1"
-            if(L > 1){newterm=paste("var",2:L,sep="")
-              for(i in 1:length(newterm)) termstoadd_mismatch <- paste(termstoadd_mismatch,"+",newterm[i],sep="")
-           }
-        }
-        if(counter > 1){
-              eval(parse(text=paste("log_linear_match <- glm(counts ~ .",termstoadd_match,",poisson , Ecounts_match)",sep="")))
-             eval(parse(text=paste("log_linear_mismatch <- glm(counts ~ ",termstoadd_mismatch,",poisson , Ecounts_mismatch)",sep="")))
-        }
-
-        probs_match_new <- numeric(2^L)
-        probs_mismatch_new <- numeric(2^L)
-        match_probs <-  log_linear_match$fitted/sum(log_linear_match$fitted)
-         probs_match_new[as.numeric(names(match_probs))] <- match_probs
-        mismatch_probs <-  log_linear_mismatch$fitted/sum(log_linear_mismatch$fitted)
-          probs_mismatch_new[as.numeric(names(mismatch_probs))] <- mismatch_probs
-        # probs_match_new[ probs_match_new < 10^-10] <- 10^-10
-       # probs_mismatch_new[probs_mismatch_new < 10^-10] <- 10^-10
-        counter=counter + 1
-        }
-      return(list(p=p_new, probs = gamma_current, model_match = log_linear_match, model_mismatch=log_linear_mismatch))
+EM_match_modelsearch_iu <- function(count_dframe,m,u,fixedcol=c(2:9),p_init=0.5,tol=10^-5,maxit=10000,allterms=allterms){
+  N <- sum(count_dframe$counts)
+  L <- ncol(count_dframe)-1
+  
+  stuff <- EM_match_independence_v3(count_dframe,m,u,p_init=0.5,tol=10^-5,fixedcol=fixedcol)         ##  get starting values.
+  p_new <- stuff$p
+  p_old <- p_new
+  gamma_current <- stuff$probs
+  counter=1
+  probs_match_new <- count_dframe$counts*gamma_current/sum(count_dframe$counts*gamma_current)
+  probs_match_old <- probs_match_new
+  probs_mismatch_new <- count_dframe$counts*(1-gamma_current)/sum(count_dframe$counts*(1-gamma_current))
+  probs_mismatch_old <- probs_mismatch_new
+  
+  Ecounts_match = count_dframe
+  Ecounts_mismatch = count_dframe
+  
+  while((counter<=maxit & max(abs(c(probs_match_new-probs_match_old, probs_mismatch_new-probs_mismatch_old,p_new-p_old))) > tol) |counter<=2){
+    
+    probs_match_old <-  probs_match_new
+    probs_mismatch_old <-  probs_mismatch_new
+    p_old <- p_new
+    
+    gamma_current <- p_old*probs_match_old/(p_old*probs_match_old  + (1-p_old)*probs_mismatch_old)
+    gamma_current[is.na(gamma_current)] <- 0
+    
+    p_new <- sum(gamma_current*count_dframe$counts)/sum(count_dframe$counts)
+    
+    Ecounts_match$counts = count_dframe$counts*gamma_current
+    Ecounts_mismatch$counts = count_dframe$counts*(1-gamma_current)
+    
+    ##  only do the following on first iteration:
+    if(counter==1){
+      
+      newterm = 1
+      logN <- log(N)
+      
+      termsnotadded = allterms
+      form = 'counts ~ .'
+      log_linear_match <- glm(form,quasipoisson , Ecounts_match)
+      BIC_0 = log_linear_match$deviance
+      minBIC = BIC_0 / 2
+      while(BIC_0 > minBIC){
+        form = paste(form,newterm,sep='+')
+        
+        log_linear_match <- glm(form,quasipoisson , Ecounts_match)
+        dfres_0 = log_linear_match$df.residual
+        BIC_0 = log_linear_match$deviance
+        llmcs = lapply(termsnotadded,function(t){
+          formc = paste(form, t, sep = '+')
+          glm(formc,quasipoisson , Ecounts_match)
+        })
+        
+        ds = sapply(llmcs,deviance)
+        dfrs = sapply(llmcs, df.residual)
+        
+        BICvec <- ds + logN * (dfres_0 - dfrs)
+        
+        newterm = termsnotadded[which.min(BICvec)]
+        
+        termsnotadded = setdiff(termsnotadded,newterm)
+        termsnotadded <- c(termsnotadded,getnewindexes_all(newterm,colnames(count_dframe)[1:L]))
+        
+        minBIC = min(BICvec) 
+      }
+      log_linear_mismatch <- glm(counts ~ .,quasipoisson , Ecounts_mismatch)
+    }
+    if(counter > 1){
+      log_linear_match <- glm(form,quasipoisson , Ecounts_match)
+      log_linear_mismatch <- glm(counts ~ .,quasipoisson , Ecounts_mismatch)
+    }
+    
+    probs_match_new <- log_linear_match$fitted/sum(log_linear_match$fitted)
+    probs_mismatch_new <-  log_linear_mismatch$fitted/sum(log_linear_mismatch$fitted)
+    counter=counter + 1
+  }
+  errs = c(mean((Ecounts_match$counts - exp(predict(log_linear_match)))^2/exp(predict(log_linear_match))),
+           mean((Ecounts_mismatch$counts - exp(predict(log_linear_mismatch)))^2/exp(predict(log_linear_mismatch))))
+  nhats = c(sum(exp(predict(log_linear_match))), sum(exp(predict(log_linear_mismatch))))
+  npar = c(length(coef(log_linear_match))-1, length(coef(log_linear_match))-1)
+  alphas = c(p_new,1-p_new)
+  
+  MRC = sum(nhats*log(errs)) + sum(nhats*(nhats + npar)/(nhats-npar-2)) - 2*sum(nhats*log(alphas))
+  
+  return(list(p=p_new, probs = gamma_current, model_match = log_linear_match, model_mismatch=log_linear_mismatch,MRC=MRC))
 }
 
 
