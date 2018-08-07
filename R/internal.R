@@ -11,91 +11,73 @@ print_simplelmform <- function(L) {
         form <- paste(form, "var",(L-1),"*","var",L , sep = "")
         form
 }
-getnewindexes_all <- function(newterm,L){
-  indexes <- sort(unlist(strsplit(newterm,split="*",fixed=TRUE)))
-  #if(length(indexes)>=3) return()
-  toadd <- setdiff(paste("var",as.character(1:L),sep=""),indexes)
+
+getnewindexes_all <- function(newterm,colnames){
+  indexes <- sort(unlist(strsplit(newterm,split=":",fixed=TRUE)))
+  toadd <- setdiff(colnames,indexes)
   newterm_big <- character(length(toadd))
   for(i in 1:length(toadd)){
-    newterm_big[i] <- paste(sort(c(indexes,toadd[i])),c(rep("*",length(indexes)),""),sep="",collapse="")
-    }
-   newterm_big
+    newterm_big[i] <- paste(sort(c(indexes,toadd[i])),c(rep(":",length(indexes)),""),sep="",collapse="")
+  }
+  newterm_big
 }
-
-getnewindexes <- function(newterm,L){
-  indexes <- sort(unlist(strsplit(newterm,split="*",fixed=TRUE)))
-  if(length(indexes)>=3) return()
-  toadd <- setdiff(paste("var",as.character(1:L),sep=""),indexes)
-  newterm_big <- character(length(toadd))
-  for(i in 1:length(toadd)){
-    newterm_big[i] <- paste(sort(c(indexes,toadd[i])),c(rep("*",length(indexes)),""),sep="",collapse="")
-    }
-   newterm_big
-}
-
-
-
-
-
-
 
 
 ###  download mortality matrix
 
 
 find_pattern <- function(count_dframe, vec){
-  L <- ncol(count_dframe)
-  indexes <- (1:(length(vec)))[vec == 0 | vec  == 1]
-  if(length(vec)==(L+1)) indexes <- (1:(length(vec)-1))[vec[1:(length(vec)-1)] == 0 | vec[1:(length(vec)-1)]  == 1]
-  if(length(indexes)==0 | is.na(indexes[1])) return("")
-  subd <- count_dframe[,indexes]  ##  just look at the columns corresonding to 0s and 1s in vec
-  if(length(indexes)==1) subd <- matrix(count_dframe[,indexes],ncol=1)
-  subvec <- vec[indexes]
-  rows <- (1:nrow(subd))[apply(subd,1,function(x){prod(as.numeric(x==subvec))})==1]  ## find rows of subd that match vec
-
+  indexes <- which(vec %in% c(0,1))
+ 
+  if(length(indexes)==0){
+    rows = 1:nrow(count_dframe)
+  }else{
+    subvec <- vec[indexes]
+    ifelse(length(indexes)==1, rows <- which(sapply(count_dframe[,indexes],function(d) all(d == subvec))),
+           rows <- which(apply(count_dframe[,indexes],1,function(d) all(d == subvec))))
+    }
   rows
-  }
+}
 
 
 
 create_01mat = function(L){
-    ncombin <- 2^L
-      mat = data.frame(c(rep(0,ncombin/2),rep(1,ncombin/2)))
-      for(coln in 2:L){
-       mat <- cbind(mat, rep(c(rep(0,ncombin/(2^coln)),rep(1,ncombin/(2^coln))),2^(coln-1)))
-      }
-      mat
-      }
+  ncombin <- 2^L
+  
+  mat = data.frame(v=rep.int(c(0,1),rep.int(ncombin/2,2)))
+  for(coln in 2:L){
+    mat <- cbind(mat, v=rep.int(rep.int(c(0,1),rep.int(ncombin/(2^coln),2)),2^(coln-1)))
+    
+  }
+  mat
+}
 
 ##  EM algorithm to fill in matrix
 
-themat <- create_01mat(7)
-
 imputemissing <- function(count_dframe,zero_one_dframe,tol=10^-4){
-  nc <- ncol(zero_one_dframe)+1
-  oldprobs <- rep(1/nrow(zero_one_dframe),nrow(zero_one_dframe))
-  Ecounts <- numeric(nrow(zero_one_dframe))
-  for(i in 1:nrow(count_dframe)){
-    indexes <- find_pattern(zero_one_dframe,count_dframe[i,1:(nc-1)])
-    if((length(indexes)> 0) && (indexes[1] != "")){
-    probs <- oldprobs[indexes]/sum(oldprobs[indexes])
-    Ecounts[indexes] <- Ecounts[indexes] + probs*count_dframe[i,nc]
-           }
-}
+  nc <- ncol(zero_one_dframe)
+  
+  flevs = 1:nrow(zero_one_dframe)
+  indices = apply(count_dframe[,1:nc],1,function(d) find_pattern(zero_one_dframe,d))
+  indexes = factor(unlist(indices),levels=flevs)
+  oldprobs <- rep.int(1/nrow(zero_one_dframe),nrow(zero_one_dframe))
+  newcounts = unlist(mapply(function(counts,i) oldprobs[i]/sum(oldprobs[i])*counts,
+                            count_dframe[,nc+1],indices))
+  
+  Ecounts = tapply(newcounts,indexes,sum,default = 0)
+  newprobs <- Ecounts/sum(Ecounts)
+  
+  while(max(abs(newprobs - oldprobs))>tol){
+    oldprobs <- newprobs
+    
+    newcounts = unlist(mapply(function(counts,i) oldprobs[i]/sum(oldprobs[i])*counts,count_dframe[,nc+1],indices))
+    
+    Ecounts = tapply(newcounts,indexes,sum,default = 0)
+    
     newprobs <- Ecounts/sum(Ecounts)
-    while(max(abs(newprobs - oldprobs))>tol){
-          oldprobs <- newprobs
-          Ecounts <- numeric(nrow(zero_one_dframe))
-     for(i in 1:nrow(count_dframe)){
-        indexes <- find_pattern(zero_one_dframe,count_dframe[i,1:(nc-1)])
-        if(min(as.numeric(as.character(count_dframe[i,1:(nc-1)])))==2) indexes <- 1:nrow(zero_one_dframe)
-        probs <- oldprobs[indexes]/sum(oldprobs[indexes])
-        Ecounts[indexes] <- Ecounts[indexes] + probs*count_dframe[i,nc]
-      }
-      newprobs <- Ecounts/sum(Ecounts)
-       }
-      return(list(counts=Ecounts,probs=newprobs))
-    }
+  }
+  return(list(counts=Ecounts,probs=newprobs))
+}
 
 
 
@@ -103,15 +85,12 @@ imputemissing <- function(count_dframe,zero_one_dframe,tol=10^-4){
 ###  reassign probabilities for matrix which has 2's.
 
 reassign_probs <- function(comparemat, zero_one_dframe, probabilities){
-  nc <- ncol(zero_one_dframe)
-  outprobs <- numeric(nrow(comparemat))
-  for(i in 1:nrow(comparemat)){
-      indexes <- find_pattern(zero_one_dframe[,1:(nc-1)],comparemat[i,])
-      if(min(comparemat[i,])==2) indexes <- (1:nrow(zero_one_dframe))
-      outprobs[i] <- sum(zero_one_dframe$counts[indexes]*probabilities[indexes])/sum(zero_one_dframe$counts[indexes])
-
-  }
-  outprobs
+  nc <- ncol(comparemat)
+  zodf = zero_one_dframe[,1:nc]
+  counts = zero_one_dframe$counts
+  
+  indices = apply(comparemat,1,function(v) find_pattern(zodf,v))
+  sapply(indices, function(i) sum(counts[i] * probabilities[i])) / sapply(indices, function(i) sum(counts[i]))
 }
 
 ### mortality ###
