@@ -1,16 +1,4 @@
 globalVariables(c("log_linear_match","log_linear_match_c","log_linear_mismatch","log_linear_mismatch_c"))
-print_simplelmform <- function(L) {
-        form <- c("~")
-        for (lower in 1:L) {
-            form <- paste(form, "var",lower, "+", sep = "")
-        }
-          for (lower in 1:(L-2)) {
-            for(upper in (lower+1):L)
-            form <- paste(form, "var",lower, "*","var",upper, "+", sep = "")
-        }
-        form <- paste(form, "var",(L-1),"*","var",L , sep = "")
-        form
-}
 
 getnewindexes_all <- function(newterm,colnames){
   indexes <- sort(unlist(strsplit(newterm,split=":",fixed=TRUE)))
@@ -22,9 +10,7 @@ getnewindexes_all <- function(newterm,colnames){
   newterm_big
 }
 
-
 ###  download mortality matrix
-
 
 find_pattern <- function(count_dframe, vec){
   indexes <- which(vec %in% c(0,1))
@@ -38,8 +24,6 @@ find_pattern <- function(count_dframe, vec){
     }
   rows
 }
-
-
 
 create_01mat = function(L){
   ncombin <- 2^L
